@@ -27,7 +27,7 @@ SAMPLE_RATE = 22050
 data = pd.DataFrame(columns=['Emotion', 'Emotion intensity', 'Gender','Path'])
 for dirname, _, filenames in os.walk(DATA_PATH):
     for i, filename in enumerate(filenames):
-        # if(i > 1): break
+        # if(i > 2): break
         file_path = os.path.join('/kaggle/input/',dirname, filename)
         identifiers = filename.split('.')[0].split('-')
         emotion = (int(identifiers[2]))
@@ -216,17 +216,29 @@ print(f'X_train:{X_train.shape}, Y_train:{Y_train.shape}')
 
 
 def getMELspectrogram(audio, sample_rate):
-    mel_spec = librosa.feature.melspectrogram(y=audio,
-                                              sr=sample_rate,
-                                              n_fft=1024,
-                                              win_length = 1024,
-                                              window='hamming',
-                                              hop_length = 256,
-                                              n_mels=80,
-                                              fmax=sample_rate/2
-                                             )
+    mel_spec = librosa.stft(y=audio,
+                                n_fft=1024,
+                                win_length = 512,
+                                window='hann',
+                                hop_length = 256,
+                                )
+    mel_spec = np.abs(mel_spec)
     mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+    # mel_spec_db = mel_spec
     return mel_spec_db
+
+# def getMELspectrogram(audio, sample_rate):
+#     mel_spec = librosa.feature.melspectrogram(y=audio,
+#                                               sr=sample_rate,
+#                                               n_fft=1024,
+#                                               win_length = 512,
+#                                               window='hamming',
+#                                               hop_length = 256,
+#                                               n_mels=80,
+#                                               fmax=sample_rate/2
+#                                              )
+#     mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+#     return mel_spec_db
 
 # test function
 audio, sample_rate = librosa.load(data.loc[0,'Path'], duration=3, offset=0.5,sr=SAMPLE_RATE)
@@ -244,6 +256,7 @@ mel_train = []
 print("Calculatin mel spectrograms for train set")
 for i in range(X_train.shape[0]):
     mel_spectrogram = getMELspectrogram(X_train[i,:], sample_rate=SAMPLE_RATE)
+    print(mel_spectrogram.shape)
     mel_train.append(mel_spectrogram)
     print("\r Processed {}/{} files".format(i,X_train.shape[0]),end='')
 print('')
@@ -284,37 +297,37 @@ print(f'X_test:{X_test.shape}, Y_test:{Y_test.shape}')
 
 
 import torch
-import torch.nn as nn
+import torch.nn as nn  
 
 class ParallelModel(nn.Module):
     def __init__(self,num_emotions):
         super().__init__()
         # conv block
-        self.conv2Dblock = nn.Sequential(
+        self.conv2Dblock1 = nn.Sequential(
             # 1. conv block
             nn.Conv2d(in_channels=1,
                        out_channels=16,
-                       kernel_size=3,
+                       kernel_size=7,
                        stride=1,
                        padding=1
                       ),
             nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(p=0.3),
+            nn.Dropout(p=0.3))
             # 2. conv block
-            nn.Conv2d(in_channels=16,
+        self.conv2Dblock2 = nn.Sequential(nn.Conv2d(in_channels=16,
                        out_channels=32,
-                       kernel_size=3,
+                       kernel_size=5,
                        stride=1,
                        padding=1
                       ),
             nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(p=0.3),
+            nn.Dropout(p=0.3))
             # 3. conv block
-            nn.Conv2d(in_channels=32,
+        self.conv2Dblock3 = nn.Sequential(nn.Conv2d(in_channels=32,
                        out_channels=64,
                        kernel_size=3,
                        stride=1,
@@ -323,9 +336,9 @@ class ParallelModel(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(p=0.3),
+            nn.Dropout(p=0.3))
             # 4. conv block
-            nn.Conv2d(in_channels=64,
+        self.conv2Dblock4 = nn.Sequential(nn.Conv2d(in_channels=64,
                        out_channels=64,
                        kernel_size=3,
                        stride=1,
@@ -334,20 +347,34 @@ class ParallelModel(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=4, stride=4),
-            nn.Dropout(p=0.3)
-        )
+            nn.Dropout(p=0.3))
+        self.conv2Dblock5 = nn.Sequential(nn.Conv2d(in_channels=64,
+                       out_channels=128,
+                       kernel_size=3,
+                       stride=1,
+                       padding=1
+                      ),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=4, stride=4),
+            nn.Dropout(p=0.3))
+        
         # Transformer block
         self.transf_maxpool = nn.MaxPool2d(kernel_size=[2,4], stride=[2,4])
-        transf_layer = nn.TransformerEncoderLayer(d_model=40, nhead=4, dim_feedforward=512, dropout=0.4, activation='relu')
+        transf_layer = nn.TransformerEncoderLayer(d_model=256, nhead=4, dim_feedforward=512, dropout=0.4, activation='relu')
         self.transf_encoder = nn.TransformerEncoder(transf_layer, num_layers=4)
         # Linear softmax layer
-        self.out_linear = nn.Linear(1064,num_emotions)
-        self.dropout_linear = nn.Dropout(p=0)
+        self.out_linear = nn.Linear(640, num_emotions)
+        self.dropout_linear = nn.Dropout(p=0.0)
         self.out_softmax = nn.Softmax(dim=1)
     def forward(self,x):
         # conv embedding
         # print("in",x.size())
-        conv_embedding = self.conv2Dblock(x) #(b,channel,freq,time)
+        conv_embedding = self.conv2Dblock1(x) #(b,channel,freq,time)
+        conv_embedding = self.conv2Dblock2(conv_embedding)
+        conv_embedding = self.conv2Dblock3(conv_embedding)
+        conv_embedding = self.conv2Dblock4(conv_embedding)
+        conv_embedding = self.conv2Dblock5(conv_embedding)
         conv_embedding = torch.flatten(conv_embedding, start_dim=1) # do not flatten batch dimension
         # transformer embedding
         x_reduced = self.transf_maxpool(x)
@@ -361,11 +388,10 @@ class ParallelModel(nn.Module):
         complete_embedding = torch.cat([conv_embedding, transf_embedding], dim=1) 
         # final Linear
         # print("complete",complete_embedding.size())
+        complete_embedding = self.dropout_linear(complete_embedding)
         output_logits = self.out_linear(complete_embedding)
-        output_logits = self.dropout_linear(output_logits)
         output_softmax = self.out_softmax(output_logits)
-        return output_logits, output_softmax
-                                     
+        return output_logits, output_softmax                                 
 
 
 # In[ ]:
@@ -448,27 +474,34 @@ X_val = np.reshape(X_val, newshape=(b,c,h,w))
 # In[ ]:
 
 
-EPOCHS=1500
+EPOCHS=5000
 DATASET_SIZE = X_train.shape[0]
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Selected device is {}'.format(device))
 model = ParallelModel(num_emotions=len(EMOTIONS)).to(device)
 print('Number of trainable params: ',sum(p.numel() for p in model.parameters()) )
-OPTIMIZER = torch.optim.SGD(model.parameters(),lr=0.01, weight_decay=1e-3, momentum=0.8)
+
+OPTIMIZER = torch.optim.Adam(model.parameters(),lr=1e-5, weight_decay=1e-5)
+# scheduler = torch.optim.lr_scheduler.ExponentialLR(OPTIMIZER, gamma=0.999)
 
 train_step = make_train_step(model, loss_fnc, optimizer=OPTIMIZER)
 validate = make_validate_fnc(model,loss_fnc)
 losses=[]
 val_losses = []
+print(X_train.shape)
 for epoch in range(EPOCHS):
-    # schuffle data
     ind = np.random.permutation(DATASET_SIZE)
     X_train = X_train[ind,:,:,:]
     Y_train = Y_train[ind]
     epoch_acc = 0
     epoch_loss = 0
     iters = int(DATASET_SIZE / BATCH_SIZE)
+    if(epoch % 100 == 0):
+        SAVE_PATH = os.path.join(os.getcwd(),'cnn_transformer')
+        os.makedirs(SAVE_PATH,exist_ok=True)
+        torch.save(model.state_dict(),os.path.join(SAVE_PATH,'cnn_transf_parallel_model%d.pt' % epoch))
+        print('Model is saved to {}'.format(os.path.join(SAVE_PATH,'cnn_transf_parallel_model%d.pt' % epoch)))
     for i in range(iters):
         batch_start = i * BATCH_SIZE
         batch_end = min(batch_start + BATCH_SIZE, DATASET_SIZE)
@@ -488,6 +521,7 @@ for epoch in range(EPOCHS):
     val_losses.append(val_loss)
     print('')
     print(f"Epoch {epoch} --> loss:{epoch_loss:.4f}, acc:{epoch_acc:.2f}%, val_loss:{val_loss:.4f}, val_acc:{val_acc:.2f}%")
+    # scheduler.step()
     
 
 
